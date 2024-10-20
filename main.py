@@ -126,8 +126,8 @@ if __name__ == "__main__":
     # Example parameters for version info publishing
     channel = 'version_channel'
     dependencies = {
-        'app2': '2.1',
-        'app3': '3.0'
+        'app1': '1.1',
+        'app2': '1.1'
     }
     
     # Publish the version message (this can also be done periodically or based on events)
