@@ -1,0 +1,23 @@
+annotated-types==0.7.0
+async-timeout==4.0.3
+certifi==2024.7.4
+charset-normalizer==3.3.2
+colorama==0.4.6
+commlib-py @ git+https://github.com/robotics-4-all/commlib-py.git@a80a87fce1fd20d60965e02686efb7699db4a4a6
+hiredis==3.0.0
+idna==3.7
+markdown-it-py==3.0.0
+mdurl==0.1.2
+paho-mqtt==1.6.1
+pika>=1.3.1, <2.0.0
+pydantic==2.8.2
+pydantic_core==2.20.1
+Pygments==2.18.0
+PyYAML==6.0.1
+redis==5.0.8
+requests==2.32.3
+rich==13.7.1
+typing_extensions==4.12.2
+ujson==5.10.0
+urllib3==2.2.2
+wheel==0.44.0

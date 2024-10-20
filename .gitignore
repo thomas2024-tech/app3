@@ -1,0 +1,8 @@
+# Ignore specific directories
+bin/
+include/
+lib/
+lib64/
+ 
+# Ignore specific files
+pyvenv.cfg
