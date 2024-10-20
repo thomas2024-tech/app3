@@ -1,6 +1,6 @@
 services:
   app1:
-    image: 1234a4321/app3:1.2
+    image: 1234a4321/app3:1.3
     environment:
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: 6379
