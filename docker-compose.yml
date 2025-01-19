@@ -9,3 +9,4 @@ services:
       - REDIS_HOST=<redis_host>
       - REDIS_PORT=6379
       - REDIS_DB=0
+    privileged: true
