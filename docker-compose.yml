@@ -3,10 +3,17 @@ services:
     image: 1234a4321/app3:1.1
     working_dir: /app
     volumes:
-      - /path/on/host/docker-compose.yml:/app/docker-compose.yml
+      - ./docker-compose.yml:/app/docker-compose.yml
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - REDIS_HOST=<redis_host>
+      - REDIS_HOST=${REDIS_HOST}
       - REDIS_PORT=6379
       - REDIS_DB=0
     privileged: true
+    restart: unless-stopped
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
