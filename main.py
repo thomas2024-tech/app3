@@ -9,6 +9,8 @@ from commlib.node import Node
 from commlib.transports.redis import ConnectionParameters
 from commlib.pubsub import PubSubMessage
 from commlib.rpc import BaseRPCService, RPCMessage
+import time
+import threading
 
 # Load environment variables from .env file
 load_dotenv()
@@ -89,27 +91,41 @@ def publish_version(channel, appname, version_number, redis_ip, dependencies=Non
             logging.info(f'  Dependent app {dep_app} version {dep_version}')
 
 class DockerComposeRPCService(BaseRPCService):
-    """RPC service to handle Docker Compose commands."""
-    
     def __init__(self, node: Node, rpc_name: str):
-        self._node = node
-        self.msg_type = DockerCommandRequest
-        self.resp_type = DockerCommandResponse
+        # Store the rpc_name as an instance variable before calling super()
+        self._rpc_name = rpc_name
+        
+        # Initialize the base service with message types
         super().__init__(
             msg_type=DockerCommandRequest,
-            rpc_name=rpc_name
+            rpc_name=rpc_name  # Pass the rpc_name to the parent class
         )
+        
+        # Store node reference
+        self._node = node
     
-    def run(self):
-        """Run the service."""
-        while True:
-            try:
-                self.process_next_message()
-            except Exception as e:
-                logging.error(f"Error processing message: {e}")
-    
-    def handle_message(self, message: DockerCommandRequest) -> DockerCommandResponse:
-        """Handle incoming RPC messages."""
+    # Property to access rpc_name
+    @property
+    def rpc_name(self):
+        """Return the RPC service name."""
+        return self._rpc_name
+
+    def start(self):
+        """
+        Keep the service running and maintain the Node connection.
+        This method will run in the main thread and keep everything alive.
+        """
+        logging.info(f"Starting RPC service: {self.rpc_name}")
+        try:
+            while True:
+                time.sleep(0.1)  # Small sleep to prevent CPU overuse
+        except Exception as e:
+            logging.error(f"Error in RPC service: {e}")
+
+    def process_request(self, message: DockerCommandRequest) -> DockerCommandResponse:
+
+        logging.info(f"Processing request: {message.command} for directory: {message.directory}")
+        
         command = message.command
         directory = message.directory
         docker_compose_file = os.path.join(directory, 'docker-compose.yml')
@@ -187,43 +203,58 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        # Create connection parameters
+        # Create connection parameters and Node initialization (stays the same)
         conn_params = ConnectionParameters(
             host=redis_ip,
             port=int(os.getenv('REDIS_PORT', 6379)),
             db=int(os.getenv('REDIS_DB', 0))
         )
 
-        # Initialize the Node
         node = Node(
-            node_name='docker_rpc_server_machine1',
+            node_name='docker_rpc_server_machine3',
             connection_params=conn_params
         )
 
-        # Create and start node thread
-        import threading
-        node_thread = threading.Thread(target=node.run, daemon=True)
-        node_thread.start()
-
-        # Create the RPC service
+        # Create the RPC service (stays the same)
         service = DockerComposeRPCService(
             node=node,
             rpc_name='docker_compose_service_machine3'
         )
 
-        # Example parameters for version info publishing
+        # Start the node in a background thread (stays the same)
+        node_thread = threading.Thread(target=node.run, daemon=True)
+        node_thread.start()
+
+        # Define dependencies and channel (stays the same)
         channel = 'version_channel'
         dependencies = {
             'app1': '1.1',
             'app2': '1.1'
         }
 
-        # Publish the version message
+        # First publish version to establish presence (stays the same)
         publish_version(channel, appname, version_number, redis_ip, dependencies)
 
-        # Run the service
-        service.run()
+        # Set up and start periodic version publishing (stays the same)
+        def publish_version_periodically():
+            while True:
+                try:
+                    publish_version(channel, appname, version_number, redis_ip, dependencies)
+                    time.sleep(60)
+                except Exception as e:
+                    logging.error(f"Error publishing version: {e}")
+                    time.sleep(5)
 
+        publisher_thread = threading.Thread(target=publish_version_periodically, daemon=True)
+        publisher_thread.start()
+
+        service.start()
+
+    except KeyboardInterrupt:
+        logging.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
         logging.error(f"Error starting service: {e}")
-        sys.exit(1)
+    finally:
+        logging.info("Shutting down services...")
+        node.stop()
+        sys.exit(0)
