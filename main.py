@@ -240,13 +240,13 @@ if __name__ == "__main__":
 
         # Create the Node
         node = Node(
-            node_name='docker_rpc_server_machine1',
+            node_name='docker_rpc_server_machine3',
             connection_params=conn_params
         )
 
         # Create RPC service with explicit message types
         service = node.create_rpc(
-            rpc_name='docker_compose_service_machine1',
+            rpc_name='docker_compose_service_machine3',
             on_request=process_request
         )
 
@@ -256,7 +256,7 @@ if __name__ == "__main__":
 
         # Define dependencies, channel and version number
         channel = 'version_channel'
-        version_number = "1.2"
+        version_number = "1.1"
         dependencies = {
             'app1': '1.1',
             'app2': '1.1'
