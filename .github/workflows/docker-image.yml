@@ -27,4 +27,4 @@ jobs:
       with:
         context: .
         push: true
-        tags: 1234a4321/app3:1.2
+        tags: 1234a4321/app3:1.1
