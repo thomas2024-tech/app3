@@ -1,0 +1,18 @@
+services:
+  app1_1_2:
+    image: 1234a4321/app3:1.2
+    working_dir: /app
+    volumes:
+    - /home/kiriakos/Documents/vs_code/firmwares/app3:/app/host_dir
+    - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+    - REDIS_HOST=${REDIS_HOST}
+    - REDIS_PORT=6379
+    - REDIS_DB=0
+    privileged: true
+    restart: unless-stopped
+    networks:
+    - app_network
+networks:
+  app_network:
+    driver: bridge
