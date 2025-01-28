@@ -8,9 +8,10 @@ from dotenv import load_dotenv
 from commlib.node import Node
 from commlib.transports.redis import ConnectionParameters
 from commlib.pubsub import PubSubMessage
-from commlib.rpc import BaseRPCService, RPCMessage
+from commlib.rpc import RPCMessage  # Note we import RPCMessage directly now
 import time
 import threading
+import docker
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,13 +22,13 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-# VersionMessage class
+# VersionMessage class for publish/subscribe communications
 class VersionMessage(PubSubMessage):
     appname: str
     version_number: str
     dependencies: dict
 
-# RPC message classes
+# RPC message classes - now properly inheriting from RPCMessage base classes
 class DockerCommandRequest(RPCMessage):
     command: str
     directory: str
@@ -90,92 +91,119 @@ def publish_version(channel, appname, version_number, redis_ip, dependencies=Non
         for dep_app, dep_version in dependencies.items():
             logging.info(f'  Dependent app {dep_app} version {dep_version}')
 
-class DockerComposeRPCService(BaseRPCService):
-    def __init__(self, node: Node, rpc_name: str):
-        # Store the rpc_name as an instance variable before calling super()
-        self._rpc_name = rpc_name
+def process_request(message):
+    try:
+        logging.info(f"⭐ Received update request: {message}")
         
-        # Initialize the base service with message types
-        super().__init__(
-            msg_type=DockerCommandRequest,
-            rpc_name=rpc_name  # Pass the rpc_name to the parent class
-        )
+        client = docker.from_env()
+        container_directory = '/app/host_dir'
+        new_version = message.get('new_version')
         
-        # Store node reference
-        self._node = node
-    
-    # Property to access rpc_name
-    @property
-    def rpc_name(self):
-        """Return the RPC service name."""
-        return self._rpc_name
+        # Read existing compose file
+        docker_compose_file = os.path.join(container_directory, 'docker-compose.yml')
+        with open(docker_compose_file, 'r') as file:
+            compose_data = yaml.safe_load(file)
+        
+        # Create new compose data with version
+        new_compose_data = compose_data.copy()
+        service_name = list(new_compose_data['services'].keys())[0]
+        current_image = new_compose_data['services'][service_name]['image']
+        repo = current_image.rsplit(':', 1)[0]
+        new_image = f"{repo}:{new_version}"
 
-    def start(self):
-        """
-        Keep the service running and maintain the Node connection.
-        This method will run in the main thread and keep everything alive.
-        """
-        logging.info(f"Starting RPC service: {self.rpc_name}")
+        # Create new service name with version
+        versioned_service_name = f"{service_name}_{new_version.replace('.', '_')}"
+
+        # Copy service config to new name and delete old one
+        new_compose_data['services'][versioned_service_name] = new_compose_data['services'][service_name].copy()
+        del new_compose_data['services'][service_name]
+
+        # Update image in new service
+        new_compose_data['services'][versioned_service_name]['image'] = new_image
+        
+        # Write the new compose file
+        new_compose_file = os.path.join(container_directory, f'docker-compose-version{new_version.replace(".", "_")}.yml')
+        with open(new_compose_file, 'w') as file:
+            yaml.dump(new_compose_data, file, default_flow_style=False, sort_keys=False)
+
+        # Ensure network exists
+        network_name = 'app_network'
         try:
-            while True:
-                time.sleep(0.1)  # Small sleep to prevent CPU overuse
+            network = client.networks.get(network_name)
+        except docker.errors.NotFound:
+            network = client.networks.create(network_name, driver='bridge')
+
+        # Get container configuration and environment
+        container_config = new_compose_data['services'][versioned_service_name]  # Use new service name
+        environment = container_config.get('environment', {})
+        
+        # Convert environment list to dictionary if needed
+        if isinstance(environment, list):
+            env_dict = {}
+            for item in environment:
+                if isinstance(item, str) and '=' in item:
+                    key, value = item.split('=', 1)
+                    env_dict[key] = value
+            environment = env_dict
+
+        # Make sure REDIS_HOST is set
+        if 'REDIS_HOST' in environment and '${REDIS_HOST}' in environment['REDIS_HOST']:
+            environment['REDIS_HOST'] = os.getenv('REDIS_HOST', 'localhost')
+
+        logging.info("Creating new container...")
+        try:
+            # Start new container first
+            new_container = client.containers.run(
+                image=new_image,
+                detach=True,
+                name=f"{versioned_service_name}".replace('.', '_'),  # Use new service name
+                volumes=container_config.get('volumes', []),
+                environment=environment,
+                working_dir=container_config.get('working_dir'),
+                privileged=True,
+                network=network_name,
+                restart_policy={"Name": "unless-stopped"}
+            )
+            
+            # Wait and check if container is running
+            time.sleep(5)
+            new_container.reload()
+            if new_container.status != 'running':
+                logs = new_container.logs().decode('utf-8')
+                raise Exception(f"Container failed to start. Logs: {logs}")
+
+            # Schedule shutdown of current container after response is sent
+            def delayed_shutdown():
+                time.sleep(2)  # Small delay to ensure response is sent
+                for container in client.containers.list(all=True):
+                    if service_name in container.name and new_version not in container.name:
+                        logging.info(f"Stopping old container {container.name}")
+                        container.stop(timeout=10)
+                        container.remove()
+
+            import threading
+            threading.Thread(target=delayed_shutdown, daemon=True).start()
+
+            return {
+                'success': True,
+                'message': f"Successfully started version {new_version}, shutting down old version"
+            }
+
         except Exception as e:
-            logging.error(f"Error in RPC service: {e}")
+            logging.error(f"Container start failed: {e}")
+            return {
+                'success': False,
+                'message': f"Container start failed: {e}"
+            }
 
-    def process_request(self, message: DockerCommandRequest) -> DockerCommandResponse:
-
-        logging.info(f"Processing request: {message.command} for directory: {message.directory}")
-        
-        command = message.command
-        directory = message.directory
-        docker_compose_file = os.path.join(directory, 'docker-compose.yml')
-        
-        if command == 'down':
-            try:
-                result = subprocess.run(
-                    ["docker-compose", "-f", docker_compose_file, "down"],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode == 0:
-                    return DockerCommandResponse(success=True, message=f"'docker-compose down' succeeded in {directory}")
-                else:
-                    return DockerCommandResponse(success=False, message=f"Error: {result.stderr}")
-            except Exception as e:
-                return DockerCommandResponse(success=False, message=f"Exception occurred: {e}")
-        
-        elif command == 'update_version':
-            new_version = message.new_version
-            try:
-                with open(docker_compose_file, 'r') as file:
-                    compose_data = yaml.safe_load(file)
-                service_name = list(compose_data['services'].keys())[0]
-                image = compose_data['services'][service_name]['image']
-                repo, appname_with_version = image.split('/')
-                appname, current_version = appname_with_version.split(':')
-                new_image = f"{repo}/{appname}:{new_version}"
-                compose_data['services'][service_name]['image'] = new_image
-                
-                with open(docker_compose_file, 'w') as file:
-                    yaml.dump(compose_data, file)
-                
-                subprocess.run(
-                    ["docker-compose", "-f", docker_compose_file, "down"],
-                    check=True
-                )
-                subprocess.run(
-                    ["docker-compose", "-f", docker_compose_file, "up", "-d"],
-                    check=True
-                )
-                return DockerCommandResponse(success=True, message=f"Updated {appname} to version {new_version}")
-            except subprocess.CalledProcessError as e:
-                return DockerCommandResponse(success=False, message=f"Subprocess error: {e}")
-            except Exception as e:
-                return DockerCommandResponse(success=False, message=f"Exception occurred: {e}")
-        
-        else:
-            return DockerCommandResponse(success=False, message=f"Unknown command '{command}'")
-
+    except Exception as e:
+        error_msg = f"Update failed: {str(e)}"
+        logging.error(error_msg)
+        return {
+            'success': False,
+            'message': error_msg
+        }
+    
 def signal_handler(sig, frame):
     """Handles shutdown signals."""
     logging.info('Shutdown signal received. Exiting...')
@@ -194,8 +222,8 @@ if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     logging.info(f"Script directory: {script_dir}")
 
-    # Load appname and version_number from docker-compose.yml
-    appname, version_number = load_docker_compose_data(directory=script_dir)
+    # Load appname from docker-compose.yml and version from current container
+    appname, _ = load_docker_compose_data(directory=script_dir)  # Get appname only
 
     # Check Redis host
     if not redis_ip:
@@ -203,39 +231,41 @@ if __name__ == "__main__":
         sys.exit(1)
 
     try:
-        # Create connection parameters and Node initialization (stays the same)
+        # Create connection parameters
         conn_params = ConnectionParameters(
             host=redis_ip,
             port=int(os.getenv('REDIS_PORT', 6379)),
             db=int(os.getenv('REDIS_DB', 0))
         )
 
+        # Create the Node
         node = Node(
-            node_name='docker_rpc_server_machine3',
+            node_name='docker_rpc_server_machine1',
             connection_params=conn_params
         )
 
-        # Create the RPC service (stays the same)
-        service = DockerComposeRPCService(
-            node=node,
-            rpc_name='docker_compose_service_machine3'
+        # Create RPC service with explicit message types
+        service = node.create_rpc(
+            rpc_name='docker_compose_service_machine1',
+            on_request=process_request
         )
 
-        # Start the node in a background thread (stays the same)
+        # Start the node in a background thread
         node_thread = threading.Thread(target=node.run, daemon=True)
         node_thread.start()
 
-        # Define dependencies and channel (stays the same)
+        # Define dependencies, channel and version number
         channel = 'version_channel'
+        version_number = "1.1"
         dependencies = {
             'app1': '1.1',
             'app2': '1.1'
         }
 
-        # First publish version to establish presence (stays the same)
+        # First publish version to establish presence
         publish_version(channel, appname, version_number, redis_ip, dependencies)
 
-        # Set up and start periodic version publishing (stays the same)
+        # Set up and start periodic version publishing
         def publish_version_periodically():
             while True:
                 try:
@@ -248,8 +278,9 @@ if __name__ == "__main__":
         publisher_thread = threading.Thread(target=publish_version_periodically, daemon=True)
         publisher_thread.start()
 
-        service.start()
-
+        while True:
+            time.sleep(0.1)
+            
     except KeyboardInterrupt:
         logging.info("Received keyboard interrupt, shutting down...")
     except Exception as e:
