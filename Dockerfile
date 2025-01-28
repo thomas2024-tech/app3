@@ -1,26 +1,26 @@
 # Python 3.9 runtime as parent image
 FROM python:3.9-slim
 
-# Install git and other system dependencies
-RUN apt-get update && apt-get install -y git
+# Install only essential build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the requirements file into the container
+# Copy only essential requirements
 COPY requirements.txt ./
 
-# Upgrade pip (optional but recommended)
-RUN pip install --upgrade pip
-
-# Install any needed packages specified in requirements.txt
+# Install Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the working directory contents into the container
+# Copy the application code
 COPY . .
 
-# Making port 80 available to the world outside this container
+# Expose port 80
 EXPOSE 80
 
-# Run main.py when the container launches
+# Run the application
 CMD ["python", "main.py"]
