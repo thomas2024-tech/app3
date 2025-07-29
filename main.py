@@ -254,22 +254,19 @@ if __name__ == "__main__":
         node_thread = threading.Thread(target=node.run, daemon=True)
         node_thread.start()
 
-        # Define dependencies, channel and version number
+        # Version info publishing
         channel = 'version_channel'
-        version_number = "1.1"
-        dependencies = {
-            'app1': '1.1',
-            'app2': '1.1'
-        }
+        # No dependencies - updater has full control via APPS_TO_UPDATE configuration
+        dependencies = {}
 
         # First publish version to establish presence
-        publish_version(channel, appname, version_number, redis_ip, dependencies)
+        publish_version(channel, appname, redis_ip, dependencies)
 
         # Set up and start periodic version publishing
         def publish_version_periodically():
             while True:
                 try:
-                    publish_version(channel, appname, version_number, redis_ip, dependencies)
+                    publish_version(channel, appname, redis_ip, dependencies)
                     time.sleep(60)
                 except Exception as e:
                     logging.error(f"Error publishing version: {e}")
